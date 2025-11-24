@@ -7,7 +7,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 # ---------------------------------------------------------
 # 1. FİZİK VE HESAPLAMA FONKSİYONLARI
 # ---------------------------------------------------------
-# (Bu kısım fiziksel hesaplamaları yapar, arayüzden bağımsızdır)
 
 def get_flight_conditions(altitude, mach, gamma=1.4):
     """Standart atmosfer modeline göre uçuş koşullarını hesaplar."""
@@ -36,7 +35,8 @@ def run_simulation(inputs):
     alt = inputs['alt']
     mach = inputs['mach']
     mdot_total = inputs['mdot_total']
-    bpr = inputs['bpr']
+    bpr = inputs['bpr'] # Yeni Tanım: m_bypass / m_total
+    
     A_coeff = inputs['A_coeff']
     n_flux = inputs['n_flux']
     m_pres = inputs['m_pres']
@@ -58,8 +58,19 @@ def run_simulation(inputs):
 
     A_throat = np.pi * (D_throat**2) / 4
     
-    mdot_combustor = mdot_total / (1 + bpr)
-    mdot_bypass = mdot_total - mdot_combustor
+    # --- DEBİ DAĞILIMI (YENİ FORMÜL) ---
+    # BPR = m_bypass / m_total olduğu için:
+    # m_bypass = m_total * BPR
+    # m_combustor = m_total - m_bypass  => m_total * (1 - BPR)
+    
+    # Güvenlik Kontrolü: BPR 0 ile 1 arasında olmalı
+    if bpr >= 1.0:
+        bpr = 0.99 # Sıfıra bölünmeyi veya mantıksızlığı önlemek için sınırla
+    elif bpr < 0:
+        bpr = 0.0
+
+    mdot_bypass = mdot_total * bpr
+    mdot_combustor = mdot_total * (1.0 - bpr)
 
     # Lookup Table (AFR vs T_comb)
     map_AFR_x = np.array([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 100])
@@ -88,7 +99,7 @@ def run_simulation(inputs):
         while p_error > 0.001 and p_iter < 100:
             p_iter += 1
             G_ox = mdot_combustor / A_port
-            r_dot = A_coeff * (G_ox**n_flux) * ((Pt4*1e-5)**m_pres) * (Tt_air**t_temp) 
+            r_dot = A_coeff * (G_ox**n_flux) * ((Pt4*1e-6)**m_pres) * (Tt_air**t_temp) 
             r_dot = r_dot * 0.01 # cm/s -> m/s
             
             mdot_fuel = rho_fuel * A_burn_surface * r_dot
@@ -131,7 +142,7 @@ def run_simulation(inputs):
 class SfrjApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("🚀 SFRJ Performans Simülatörü v2.1")
+        self.root.title("🚀 SFRJ Performans Simülatörü v2.2")
         self.root.geometry("900x550")
         self.root.configure(bg="#f0f0f0")
 
@@ -160,7 +171,8 @@ class SfrjApp:
         self.create_row(frame_flight, "İrtifa (m):", "alt", 10000, 0)
         self.create_row(frame_flight, "Mach Sayısı:", "mach", 2.5, 1)
         self.create_row(frame_flight, "Toplam Hava (kg/s):", "mdot_total", 3.0, 2)
-        self.create_row(frame_flight, "Bypass Oranı (BPR):", "bpr", 1.0, 3)
+        # Etiketi güncelledik
+        self.create_row(frame_flight, "BPR (m_by / m_tot):", "bpr", 0.3, 3) 
 
         # --- 2. Sütun: Geometri ---
         frame_geo = ttk.LabelFrame(main_frame, text=" 📐 Geometri ", padding=15)
@@ -244,8 +256,7 @@ class SfrjApp:
         rdot_init = hist['r_dot'][0]
         rdot_final = hist['r_dot'][-1]
 
-        # 3. Geometrik Oranlar (INITIAL / İLK AN) - İsteğine göre burası düzeltildi
-        # Tasarım oranları her zaman t=0'daki geometriden kontrol edilir.
+        # 3. Geometrik Oranlar (INITIAL / İLK AN)
         D_port_init_m = inputs['D_port'] / 1000.0
         D_inlet_m = inputs['D_inlet'] / 1000.0
         D_throat_m = inputs['D_throat'] / 1000.0
