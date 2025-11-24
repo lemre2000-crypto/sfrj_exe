@@ -1,0 +1,29 @@
+name: EXE Olustur
+
+on: [push]
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Python Kur
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10' 
+        
+    - name: Kutuphaneleri Kur
+      run: |
+        pip install numpy matplotlib pyinstaller
+        
+    - name: EXE Dosyasini Derle
+      run: |
+        pyinstaller --onefile --noconsole --name SFRJ_Sim sfrj_sim.py
+        
+    - name: EXE Dosyasini Yukle (Artifact)
+      uses: actions/upload-artifact@v3
+      with:
+        name: SFRJ_Sim_Windows_EXE
+        path: dist/SFRJ_Sim.exe
