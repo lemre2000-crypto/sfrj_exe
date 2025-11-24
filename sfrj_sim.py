@@ -7,8 +7,10 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 # ---------------------------------------------------------
 # 1. FİZİK VE HESAPLAMA FONKSİYONLARI
 # ---------------------------------------------------------
+# (Bu kısım fiziksel hesaplamaları yapar, arayüzden bağımsızdır)
 
 def get_flight_conditions(altitude, mach, gamma=1.4):
+    """Standart atmosfer modeline göre uçuş koşullarını hesaplar."""
     T0 = 288.15
     P0 = 101325.0
     g = 9.80665
@@ -30,7 +32,7 @@ def get_flight_conditions(altitude, mach, gamma=1.4):
     return T_total, P_total, T_static, P_static
 
 def run_simulation(inputs):
-    # Girdileri paketinden çıkar
+    # Girdileri al
     alt = inputs['alt']
     mach = inputs['mach']
     mdot_total = inputs['mdot_total']
@@ -59,17 +61,20 @@ def run_simulation(inputs):
     mdot_combustor = mdot_total / (1 + bpr)
     mdot_bypass = mdot_total - mdot_combustor
 
+    # Lookup Table (AFR vs T_comb)
     map_AFR_x = np.array([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 100])
     map_AFR_y = np.array([2500, 2500, 2750, 2820, 2800, 2750, 2650, 2580, 2500, 2400, 2310, 2250, 2180, 500])
 
+    # Choked Flow Sabiti
     flow_const = np.sqrt(gamma_gas/R_gas) * ((gamma_gas+1)/2)**(-(gamma_gas+1)/(2*(gamma_gas-1)))
 
     dt = 0.1
     time_max = 200
     time = 0
     sim_running = True
-    Pt4 = 500000 # 5 Bar başlangıç
+    Pt4 = 500000 # 5 Bar başlangıç tahmini
 
+    # Sonuçları saklayacak sözlük
     history = {'time': [], 'D_port': [], 'Pt4': [], 'r_dot': [], 'AFR': [], 'mdot_fuel': [], 'T_mixed': []}
     status_msg = "Simülasyon başarıyla tamamlandı."
 
@@ -77,23 +82,29 @@ def run_simulation(inputs):
         A_port = np.pi * (D_port**2) / 4
         A_burn_surface = np.pi * D_port * L_fuel
 
+        # Basınç İterasyonu
         p_error = 1.0
         p_iter = 0
         while p_error > 0.001 and p_iter < 100:
             p_iter += 1
             G_ox = mdot_combustor / A_port
             r_dot = A_coeff * (G_ox**n_flux) * ((Pt4*1e-5)**m_pres) * (Tt_air**t_temp) 
-            r_dot = r_dot * 0.01 
+            r_dot = r_dot * 0.01 # cm/s -> m/s
+            
             mdot_fuel = rho_fuel * A_burn_surface * r_dot
             AFR = mdot_combustor / mdot_fuel
             T_comb = np.interp(AFR, map_AFR_x, map_AFR_y)
+            
             mdot_nozzle = mdot_combustor + mdot_fuel + mdot_bypass
             mdot_core = mdot_combustor + mdot_fuel
+            
             T_mixed = ((mdot_core * T_comb) + (mdot_bypass * Tt_air)) / mdot_nozzle
             Pt4_new = mdot_nozzle * np.sqrt(T_mixed) / (A_throat * flow_const)
+            
             p_error = abs(Pt4_new - Pt4) / Pt4
             Pt4 = Pt4_new
 
+        # Kayıt
         history['time'].append(time)
         history['D_port'].append(D_port * 1000)
         history['Pt4'].append(Pt4 * 1e-5)
@@ -102,6 +113,7 @@ def run_simulation(inputs):
         history['mdot_fuel'].append(mdot_fuel)
         history['T_mixed'].append(T_mixed)
 
+        # İlerleme
         dr = r_dot * dt
         D_port += 2 * dr
         time += dt
@@ -119,9 +131,9 @@ def run_simulation(inputs):
 class SfrjApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("🚀 SFRJ Performans Simülatörü v2.0")
+        self.root.title("🚀 SFRJ Performans Simülatörü v2.1")
         self.root.geometry("900x550")
-        self.root.configure(bg="#f0f0f0") # Hafif gri arka plan
+        self.root.configure(bg="#f0f0f0")
 
         # --- Stil Ayarları ---
         style = ttk.Style()
@@ -139,7 +151,6 @@ class SfrjApp:
         main_frame = tk.Frame(root, bg="#f0f0f0")
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20)
 
-        # Sözlük oluştur (girdileri saklamak için)
         self.entries = {}
 
         # --- 1. Sütun: Uçuş Koşulları ---
@@ -171,7 +182,7 @@ class SfrjApp:
         self.create_row(frame_fuel, "Basınç Üssü (m):", "m_pres", 0.33, 3)
         self.create_row(frame_fuel, "Sıcaklık Üssü (t):", "t_temp", 0.71, 4)
 
-        # Sütun ağırlıklarını eşitle (Genişlesinler)
+        # Sütun ağırlıklarını eşitle
         main_frame.columnconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
         main_frame.columnconfigure(2, weight=1)
@@ -182,56 +193,69 @@ class SfrjApp:
                               cursor="hand2", command=self.start_simulation)
         btn_start.pack(fill=tk.X, padx=30, pady=25, ipady=5)
 
-        # Alt bilgi
         footer = tk.Label(root, text="Oluşturulan pencereler simülasyon sonuçlarını içerecektir.", bg="#f0f0f0", fg="#7f8c8d")
         footer.pack(pady=5)
 
     def create_row(self, parent, label_text, key, default_val, row_idx):
         lbl = ttk.Label(parent, text=label_text)
         lbl.grid(row=row_idx, column=0, sticky="w", pady=5)
-        
         ent = ttk.Entry(parent, width=12, justify="center")
         ent.insert(0, str(default_val))
         ent.grid(row=row_idx, column=1, sticky="e", pady=5, padx=5)
-        
         self.entries[key] = ent
 
     def start_simulation(self):
         try:
-            # 1. Verileri topla
             inputs = {key: float(entry.get()) for key, entry in self.entries.items()}
-            
-            # 2. Simülasyonu çalıştır
             hist, Pt_air_bar, msg = run_simulation(inputs)
-            
-            # 3. Sonuçları işle
             self.show_results_window(inputs, hist, Pt_air_bar, msg)
             self.show_plots_window(hist, Pt_air_bar)
-
         except ValueError:
             messagebox.showerror("Hata", "Lütfen tüm alanlara geçerli sayısal değerler giriniz.")
         except Exception as e:
             messagebox.showerror("Kritik Hata", f"Beklenmeyen bir hata oluştu:\n{str(e)}")
 
     def show_results_window(self, inputs, hist, Pt_air_bar, msg):
+        """Rapor penceresi: Performans verileri (Start->End) ve Geometrik Oranlar (Initial)"""
         win = tk.Toplevel(self.root)
         win.title("📝 Simülasyon Sonuç Raporu")
-        win.geometry("500x700")
+        win.geometry("520x750")
         
         txt = tk.Text(win, font=("Consolas", 10), padx=10, pady=10)
         txt.pack(fill=tk.BOTH, expand=True)
 
+        # --- Hesaplamalar ---
+        
+        # 1. Genel
         total_fuel = sum(hist['mdot_fuel']) * 0.1
-        T_mixed_final = hist['T_mixed'][-1]
-        mdot_nozzle_final = inputs['mdot_total'] + hist['mdot_fuel'][-1]
         fuel_thickness = (inputs['D_outer'] - inputs['D_port']) / 2
         is_buzz = hist['Pt4'][-1] >= Pt_air_bar
 
-        A_port_end = np.pi * (hist['D_port'][-1]/1000)**2 / 4 
-        A_inlet = np.pi * (inputs['D_inlet']/1000)**2 / 4
-        A_throat = np.pi * (inputs['D_throat']/1000)**2 / 4
+        # 2. Performans Değişimleri (Start -> End)
+        mdot_nozzle_init = inputs['mdot_total'] + hist['mdot_fuel'][0]
+        mdot_nozzle_final = inputs['mdot_total'] + hist['mdot_fuel'][-1]
         
-        A_port_mm2 = A_port_end * 1e6
+        T_mixed_init = hist['T_mixed'][0]
+        T_mixed_final = hist['T_mixed'][-1]
+        
+        AFR_init = hist['AFR'][0]
+        AFR_final = hist['AFR'][-1]
+        
+        rdot_init = hist['r_dot'][0]
+        rdot_final = hist['r_dot'][-1]
+
+        # 3. Geometrik Oranlar (INITIAL / İLK AN) - İsteğine göre burası düzeltildi
+        # Tasarım oranları her zaman t=0'daki geometriden kontrol edilir.
+        D_port_init_m = inputs['D_port'] / 1000.0
+        D_inlet_m = inputs['D_inlet'] / 1000.0
+        D_throat_m = inputs['D_throat'] / 1000.0
+
+        A_port_init = np.pi * (D_port_init_m**2) / 4
+        A_inlet = np.pi * (D_inlet_m**2) / 4
+        A_throat = np.pi * (D_throat_m**2) / 4
+        
+        # mm2 cinsinden (Görsel için)
+        A_port_init_mm2 = A_port_init * 1e6
         A_inlet_mm2 = A_inlet * 1e6
         A_throat_mm2 = A_throat * 1e6
 
@@ -239,11 +263,13 @@ class SfrjApp:
         report_str += f"Simülasyon Süresi   : {hist['time'][-1]:.2f} s\n"
         report_str += f"Toplam Yakıt        : {total_fuel:.4f} kg\n"
         report_str += f"Yakıt Et Kalınlığı  : {fuel_thickness:.4f} mm\n"
-        report_str += "--------------------------------------\nANLIK PERFORMANS (SİMÜLASYON SONU):\n"
-        report_str += f"Toplam Debi         : {mdot_nozzle_final:.4f} kg/s\n"
-        report_str += f"Lüle Giriş Sıcaklığı: {T_mixed_final:.2f} K\n"
-        report_str += f"AFR                 : {hist['AFR'][-1]:.2f}\n"
-        report_str += f"Regresyon Hızı      : {hist['r_dot'][-1]:.4f} mm/s\n"
+        
+        report_str += "--------------------------------------\nPERFORMANS DEĞİŞİMİ (BAŞ -> SON):\n"
+        report_str += f"Toplam Debi         : {mdot_nozzle_init:.4f} -> {mdot_nozzle_final:.4f} kg/s\n"
+        report_str += f"Lüle Giriş Sıcaklığı: {T_mixed_init:.2f} -> {T_mixed_final:.2f} K\n"
+        report_str += f"AFR                 : {AFR_init:.2f} -> {AFR_final:.2f}\n"
+        report_str += f"Regresyon Hızı      : {rdot_init:.4f} -> {rdot_final:.4f} mm/s\n"
+        
         report_str += "--------------------------------------\nBASINÇ DURUMU:\n"
         report_str += f"Giriş Basıncı (Pt1) : {Pt_air_bar:.2f} Bar\n"
         report_str += f"YO Basıncı (Pt4)    : {hist['Pt4'][0]:.2f} -> {hist['Pt4'][-1]:.2f} Bar\n\nDURUM ANALİZİ:\n"
@@ -253,13 +279,13 @@ class SfrjApp:
         else:
             report_str += "✅ NORMAL ÇALIŞMA (Pt4 < Pt1)"
 
-        report_str += f"\n--------------------------------------\nGEOMETRİK VERİLER (SON DURUM):\n"
-        report_str += f"Port Çapı           : {hist['D_port'][0]:.1f} -> {hist['D_port'][-1]:.1f} mm\n\n"
-        report_str += f"Port Çıkış Alanı    : {A_port_mm2:.1f} mm²\n"
+        report_str += f"\n--------------------------------------\nGEOMETRİK VERİLER (İLK DURUM / t=0):\n"
+        report_str += f"Port Çapı           : {hist['D_port'][0]:.1f} mm\n\n"
+        report_str += f"Port Alanı (İlk)    : {A_port_init_mm2:.1f} mm²\n"
         report_str += f"Giriş Alanı         : {A_inlet_mm2:.1f} mm²\n"
         report_str += f"Boğaz Alanı         : {A_throat_mm2:.1f} mm²\n\n"
-        report_str += f"A_port / A_inlet    : {A_port_end / A_inlet:.4f}\n"
-        report_str += f"A_port / A_throat   : {A_port_end / A_throat:.4f}\n"
+        report_str += f"A_port / A_inlet    : {A_port_init / A_inlet:.4f}\n"
+        report_str += f"A_port / A_throat   : {A_port_init / A_throat:.4f}\n"
         report_str += f"A_throat / A_inlet  : {A_throat / A_inlet:.4f}\n"
         report_str += "======================================\n"
         
@@ -301,7 +327,6 @@ class SfrjApp:
         canvas = FigureCanvasTkAgg(fig, master=win)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
 
 if __name__ == "__main__":
     root = tk.Tk()
